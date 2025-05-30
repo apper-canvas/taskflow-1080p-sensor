@@ -12,3 +12,7 @@ const ApperIcon = ({ name, ...props }) => {
 };
 
 export default ApperIcon;
+  Folder,
+  ArrowLeft
+  Folder,
+  ArrowLeft

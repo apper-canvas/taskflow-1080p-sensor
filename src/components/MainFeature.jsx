@@ -3,40 +3,26 @@ import { motion, AnimatePresence } from 'framer-motion'
 import { toast } from 'react-toastify'
 import { format, isToday, isTomorrow, isPast } from 'date-fns'
 import ApperIcon from './ApperIcon'
+import { taskService } from '../services/taskService'
+import { categoryService } from '../services/categoryService'
 
 const MainFeature = () => {
-  const [tasks, setTasks] = useState([
-    {
-      id: '1',
-      title: 'Complete project proposal',
-      description: 'Finish the Q4 project proposal for the new client',
-      completed: false,
-      priority: 'high',
-      dueDate: new Date(),
-      categoryId: 'work',
-      createdAt: new Date()
-    },
-    {
-      id: '2',
-      title: 'Buy groceries',
-      description: 'Milk, eggs, bread, fruits',
-      completed: true,
-      priority: 'medium',
-      dueDate: new Date(),
-      categoryId: 'personal',
-      createdAt: new Date()
-    },
-    {
-      id: '3',
-      title: 'Call dentist',
-      description: 'Schedule appointment for next week',
-      completed: false,
-      priority: 'low',
-      dueDate: new Date(Date.now() + 86400000),
-      categoryId: 'personal',
-      createdAt: new Date()
-    }
+  const [tasks, setTasks] = useState([])
+  const [categories, setCategories] = useState([
+    { id: 'work', name: 'Work', icon: 'Briefcase' },
+    { id: 'personal', name: 'Personal', icon: 'User' },
+    { id: 'shopping', name: 'Shopping', icon: 'ShoppingCart' }
   ])
+  
+  // Loading states
+  const [loadingTasks, setLoadingTasks] = useState(false)
+  const [loadingCategories, setLoadingCategories] = useState(false)
+  const [loadingSubmit, setLoadingSubmit] = useState(false)
+  const [loadingDelete, setLoadingDelete] = useState(false)
+  
+  // Error states
+  const [errorTasks, setErrorTasks] = useState(false)
+  const [errorCategories, setErrorCategories] = useState(false)
 
   const [showForm, setShowForm] = useState(false)
   const [editingTask, setEditingTask] = useState(null)
@@ -81,6 +67,55 @@ const MainFeature = () => {
     }
   })
 
+  // Load tasks and categories on component mount
+  useEffect(() => {
+    loadTasks()
+    loadCategories()
+  }, [])
+
+  const loadTasks = async (filterType = 'all') => {
+    setLoadingTasks(true)
+    setErrorTasks(false)
+    try {
+      const fetchedTasks = await taskService.fetchTasks(filterType)
+      setTasks(fetchedTasks)
+    } catch (error) {
+      console.error("Failed to load tasks:", error)
+      setErrorTasks(true)
+      toast.error("Failed to load tasks. Please try again.")
+    } finally {
+      setLoadingTasks(false)
+    }
+  }
+
+  const loadCategories = async () => {
+    setLoadingCategories(true)
+    setErrorCategories(false)
+    try {
+      const fetchedCategories = await categoryService.fetchCategories()
+      setCategories(fetchedCategories)
+    } catch (error) {
+      console.error("Failed to load categories:", error)
+      setErrorCategories(true)
+      // Keep default categories on error
+    } finally {
+      setLoadingCategories(false)
+    }
+  }
+
+  const filteredTasks = tasks.filter(task => {
+    switch (filter) {
+      case 'active':
+        return !task.completed
+      case 'completed':
+        return task.completed
+      case 'overdue':
+        return !task.completed && isPast(task.dueDate) && !isToday(task.dueDate)
+      default:
+        return true
+    }
+  })
+
   const handleSubmit = (e) => {
     e.preventDefault()
     
@@ -89,52 +124,83 @@ const MainFeature = () => {
       return
     }
 
-    if (editingTask) {
-      setTasks(tasks.map(task => 
-        task.id === editingTask.id 
-          ? { ...task, ...formData, dueDate: new Date(formData.dueDate) }
-          : task
-      ))
-      toast.success('Task updated successfully!')
-      setEditingTask(null)
-    } else {
-      const newTask = {
-        id: Date.now().toString(),
-        ...formData,
-        completed: false,
-        dueDate: new Date(formData.dueDate),
-        createdAt: new Date()
+    handleTaskSubmit()
+  }
+
+  const handleTaskSubmit = async () => {
+    setLoadingSubmit(true)
+    try {
+      if (editingTask) {
+        // Update existing task
+        await taskService.updateTask(editingTask.id, {
+          ...formData,
+          dueDate: new Date(formData.dueDate),
+          completed: editingTask.completed
+        })
+        toast.success('Task updated successfully!')
+        setEditingTask(null)
+      } else {
+        // Create new task
+        await taskService.createTask({
+          ...formData,
+          dueDate: new Date(formData.dueDate)
+        })
+        toast.success('Task created successfully!')
       }
-      setTasks([newTask, ...tasks])
-      toast.success('Task created successfully!')
-    }
 
-    setFormData({
-      title: '',
-      description: '',
-      priority: 'medium',
-      dueDate: format(new Date(), 'yyyy-MM-dd'),
-      categoryId: 'personal'
-    })
-    setShowForm(false)
+      // Reset form and reload tasks
+      setFormData({
+        title: '',
+        description: '',
+        priority: 'medium',
+        dueDate: format(new Date(), 'yyyy-MM-dd'),
+        categoryId: 'personal'
+      })
+      setShowForm(false)
+      await loadTasks(filter)
+    } catch (error) {
+      console.error("Failed to save task:", error)
+      toast.error(editingTask ? "Failed to update task" : "Failed to create task")
+    } finally {
+      setLoadingSubmit(false)
+    }
   }
 
-  const toggleTask = (id) => {
-    setTasks(tasks.map(task => 
-      task.id === id 
-        ? { ...task, completed: !task.completed }
-        : task
-    ))
-    
+  const toggleTask = async (id) => {
     const task = tasks.find(t => t.id === id)
-    if (task && !task.completed) {
-      toast.success('Task completed! 🎉')
+    if (!task) return
+
+    try {
+      await taskService.updateTask(id, {
+        ...task,
+        completed: !task.completed
+      })
+      
+      if (!task.completed) {
+        toast.success('Task completed! 🎉')
+      } else {
+        toast.success('Task marked as pending')
+      }
+      
+      await loadTasks(filter)
+    } catch (error) {
+      console.error("Failed to toggle task:", error)
+      toast.error("Failed to update task status")
     }
   }
 
-  const deleteTask = (id) => {
-    setTasks(tasks.filter(task => task.id !== id))
-    toast.success('Task deleted')
+  const deleteTask = async (id) => {
+    setLoadingDelete(true)
+    try {
+      await taskService.deleteTask(id)
+      toast.success('Task deleted successfully')
+      await loadTasks(filter)
+    } catch (error) {
+      console.error("Failed to delete task:", error)
+      toast.error("Failed to delete task")
+    } finally {
+      setLoadingDelete(false)
+    }
   }
 
   const editTask = (task) => {
@@ -174,6 +240,11 @@ const MainFeature = () => {
     <div className="p-4 sm:p-6 lg:p-8 max-w-6xl mx-auto space-y-6">
       {/* Header */}
       <motion.div 
+  // Reload tasks when filter changes
+  useEffect(() => {
+    loadTasks(filter)
+  }, [filter])
+
         initial={{ opacity: 0, y: 20 }}
         animate={{ opacity: 1, y: 0 }}
         className="flex flex-col sm:flex-row sm:items-center sm:justify-between space-y-4 sm:space-y-0"
@@ -189,7 +260,7 @@ const MainFeature = () => {
           whileHover={{ scale: 1.05 }}
           whileTap={{ scale: 0.95 }}
           onClick={() => setShowForm(true)}
-          className="btn-primary inline-flex items-center space-x-2 w-full sm:w-auto justify-center"
+    const category = categories?.find(c => c.id === categoryId)
         >
           <ApperIcon name="Plus" className="w-5 h-5" />
           <span>Add Task</span>
@@ -218,6 +289,7 @@ const MainFeature = () => {
             <ApperIcon name={filterOption.icon} className="w-4 h-4" />
             <span className="text-sm">{filterOption.name}</span>
           </motion.button>
+          disabled={loadingTasks || loadingSubmit}
         ))}
       </motion.div>
 
@@ -232,6 +304,12 @@ const MainFeature = () => {
             onClick={() => {
               setShowForm(false)
               setEditingTask(null)
+        {loadingTasks && (
+          <div className="text-sm text-surface-500 flex items-center space-x-2">
+            <div className="w-4 h-4 border-2 border-primary border-t-transparent rounded-full animate-spin"></div>
+            <span>Loading tasks...</span>
+          </div>
+        )}
               setFormData({
                 title: '',
                 description: '',
@@ -245,6 +323,7 @@ const MainFeature = () => {
               initial={{ scale: 0.9, opacity: 0 }}
               animate={{ scale: 1, opacity: 1 }}
               exit={{ scale: 0.9, opacity: 0 }}
+            disabled={loadingTasks}
               onClick={(e) => e.stopPropagation()}
               className="bg-white rounded-2xl shadow-2xl w-full max-w-md p-6 space-y-6"
             >
@@ -377,7 +456,11 @@ const MainFeature = () => {
         transition={{ delay: 0.2 }}
         className="space-y-4"
       >
+                  disabled={loadingSubmit}
         <AnimatePresence>
+                  {loadingSubmit && (
+                    <div className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin mr-2"></div>
+                  )}
           {filteredTasks.length === 0 ? (
             <motion.div
               initial={{ opacity: 0, y: 20 }}
@@ -387,6 +470,7 @@ const MainFeature = () => {
               <div className="w-16 h-16 bg-surface-100 rounded-2xl flex items-center justify-center mx-auto mb-4">
                 <ApperIcon name="CheckSquare" className="w-8 h-8 text-surface-400" />
               </div>
+                  disabled={loadingSubmit}
               <h3 className="text-lg font-semibold text-surface-900 mb-2">No tasks found</h3>
               <p className="text-surface-600">
                 {filter === 'all' 
@@ -408,7 +492,26 @@ const MainFeature = () => {
                 <div className="flex items-start space-x-4">
                   <motion.button
                     whileHover={{ scale: 1.1 }}
-                    whileTap={{ scale: 0.9 }}
+          {errorTasks ? (
+            <motion.div
+              initial={{ opacity: 0, y: 20 }}
+              animate={{ opacity: 1, y: 0 }}
+              className="text-center py-12"
+            >
+              <div className="w-16 h-16 bg-red-100 rounded-2xl flex items-center justify-center mx-auto mb-4">
+                <ApperIcon name="AlertCircle" className="w-8 h-8 text-red-600" />
+              </div>
+              <h3 className="text-lg font-semibold text-surface-900 mb-2">Failed to load tasks</h3>
+              <p className="text-surface-600 mb-4">There was an error loading your tasks.</p>
+              <button
+                onClick={() => loadTasks(filter)}
+                className="btn-primary"
+                disabled={loadingTasks}
+              >
+                {loadingTasks ? 'Retrying...' : 'Try Again'}
+              </button>
+            </motion.div>
+          ) : filteredTasks.length === 0 && !loadingTasks ? (
                     onClick={() => toggleTask(task.id)}
                     className={`mt-1 w-5 h-5 rounded-full border-2 flex items-center justify-center transition-all duration-200 ${
                       task.completed 
@@ -449,6 +552,7 @@ const MainFeature = () => {
                           </span>
                           
                           <span className="flex items-center space-x-1 text-surface-500">
+                    disabled={loadingTasks}
                             <ApperIcon name={getCategoryIcon(task.categoryId)} className="w-3 h-3" />
                             <span>{categories.find(c => c.id === task.categoryId)?.name}</span>
                           </span>
@@ -480,7 +584,7 @@ const MainFeature = () => {
                           className="p-2 rounded-lg hover:bg-red-50 text-red-600"
                         >
                           <ApperIcon name="Trash2" className="w-4 h-4" />
-                        </motion.button>
+                            <span>{categories?.find(c => c.id === task.categoryId)?.name || 'Unknown'}</span>
                       </div>
                     </div>
                   </div>
@@ -495,3 +599,9 @@ const MainFeature = () => {
 }
 
 export default MainFeature
+                          disabled={loadingTasks || loadingSubmit}
+                          disabled={loadingTasks || loadingDelete}
+                          {loadingDelete ? (
+                            <div className="w-4 h-4 border-2 border-red-600 border-t-transparent rounded-full animate-spin"></div>
+                          ) : (
+                          )}
